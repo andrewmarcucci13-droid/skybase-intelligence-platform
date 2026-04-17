@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL database ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: skybase_db
+    environment:
+      POSTGRES_USER: skybase
+      POSTGRES_PASSWORD: skybase
+      POSTGRES_DB: skybase
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skybase"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Celery broker + job state) ─────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: skybase_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI backend ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: skybase_api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://skybase:skybase@postgres:5432/skybase
+      REDIS_URL: redis://redis:6379/0
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_placeholder
+      STRIPE_PRICE_ID: price_placeholder
+      FRONTEND_URL: http://localhost:3000
+      APP_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Celery worker (runs the 7 analysis agents) ─────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: skybase_worker
+    environment:
+      DATABASE_URL: postgresql://skybase:skybase@postgres:5432/skybase
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: celery -A app.tasks.orchestrator.celery_app worker --loglevel=info --concurrency=4
+
+  # ── Flower (Celery task monitor — see agent jobs in real time) ─────────────
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: skybase_flower
+    ports:
+      - "5555:5555"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+      - worker
+    command: celery -A app.tasks.orchestrator.celery_app flower --port=5555
+
+volumes:
+  postgres_data:
