@@ -7,7 +7,7 @@ import { getAnalysis, getReportUrl } from '@/lib/api';
 import type { AnalysisResponse } from '@/lib/api';
 import ScoreGauge from '@/components/ScoreGauge';
 
-const STRIPE_SUB_PRICE_ID = 'price_1TNhCiB6nlyxBcZvchN2Q9CA';
+const STRIPE_SUB_PAYMENT_LINK = 'https://buy.stripe.com/test_cNifZg3R1dVM07mbXi8k800';
 
 export default function ReportPage() {
   const params = useParams();
@@ -71,7 +71,7 @@ export default function ReportPage() {
                 and local zoning changes that affect your site — $99/month.
               </p>
               <a
-                href={`https://buy.stripe.com/${STRIPE_SUB_PRICE_ID}`}
+                href={STRIPE_SUB_PAYMENT_LINK}
                 className="inline-flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 py-3 rounded-xl transition-colors"
               >
                 Subscribe — $99/month
