@@ -1,56 +1,101 @@
 # Railway Deployment — Step-by-Step
 
-Railway does not support multi-process Procfiles like Heroku. You need **three services**:
-1. `web` — FastAPI (uses Dockerfile, starts uvicorn)
-2. `worker` — Celery (uses same Dockerfile, overrides start command)
-3. `postgres` — Railway managed PostgreSQL
-4. `redis` — Railway managed Redis
+## The Worker Healthcheck Problem
+
+Railway applies `railway.json` to every service, including the worker.
+The worker is a Celery process — it has **no HTTP server**, so Railway's healthcheck always fails.
+
+**Fix:** In the worker service settings on Railway:
+1. Click the **worker** service → **Settings** tab
+2. Scroll to **Deploy** section → find **Healthcheck Path**
+3. **Delete the path entirely** (leave it blank) to disable the healthcheck
+4. Also override the **Start Command** to:
+   ```
+   celery -A app.tasks.orchestrator:celery_app worker --loglevel=info --concurrency=2
+   ```
+5. Click **Save** → Railway will redeploy automatically
 
 ---
 
-## Step 1 — Create Project & Add Services
+## Environment Variables — Exact Values
 
-1. Go to [railway.app](https://railway.app) → **New Project**
-2. Click **Add a Service** → **GitHub Repo** → select `skybase-intelligence-platform`
-   - This becomes your **web** service
-3. Click **Add a Service** → **GitHub Repo** → select `skybase-intelligence-platform` again
-   - This becomes your **worker** service
-4. Click **Add a Service** → **Database** → **PostgreSQL**
-5. Click **Add a Service** → **Database** → **Redis**
+### Critical: Fix These Wrong Values First
+
+The following variables in your Railway worker (and web) service have **wrong placeholder values**
+that will crash the app on startup:
+
+| Variable | Wrong Value | Correct Value |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://skybase:skybase@localhost:5432/skybase` | Must be Railway's internal Postgres URL — see below |
+| `REDIS_URL` | `redis://localhost:6379/0` | Must be Railway's internal Redis URL — see below |
+| `APP_ENV` | `development` | `production` |
+| `FRONTEND_URL` | `http://localhost:3000` | `https://skybaseintel.com` |
+| `SECRET_KEY` | `generate-a-random-32-char-string` | `0a5d263856badc969e7a016e51fcb318927e4d4e7411641cf62b317b966608b9` |
 
 ---
 
-## Step 2 — Configure Web Service
+## How to Get DATABASE_URL and REDIS_URL from Railway
 
-In the **web** service settings:
-- **Build**: Dockerfile (auto-detected from `railway.json`)
-- **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Add these environment variables (click Variables):
+Railway generates these automatically from your managed services.
+
+### DATABASE_URL
+1. In your Railway project, click the **PostgreSQL** service
+2. Click the **Variables** tab
+3. Find `DATABASE_URL` — copy its value (looks like `postgresql://postgres:password@monorail.proxy.rlwy.net:PORT/railway`)
+4. Go to your **web** service → Variables → paste it as `DATABASE_URL`
+5. Do the same for the **worker** service
+
+### REDIS_URL
+1. Click the **Redis** service in your project
+2. Click **Variables** tab
+3. Find `REDIS_URL` — copy its value (looks like `redis://default:password@monorail.proxy.rlwy.net:PORT`)
+4. Paste it as `REDIS_URL` in both the web and worker services
+
+**Shortcut:** Instead of copy-pasting, use Railway's **Reference Variables**:
+- In web/worker Variables tab, click **New Variable**
+- Set key = `DATABASE_URL`, then in the value field click **Add Reference**
+- Select the PostgreSQL service and pick `DATABASE_URL`
+- This auto-updates if the connection string ever changes
+
+---
+
+## Complete Variable List for Web Service
 
 ```
-DATABASE_URL         → click "Add Reference" → select PostgreSQL → DATABASE_URL
-REDIS_URL            → click "Add Reference" → select Redis → REDIS_URL
-STRIPE_SECRET_KEY    = sk_test_...  (copy from Stripe Dashboard → Developers → API Keys)
-STRIPE_WEBHOOK_SECRET = (get from Stripe dashboard after adding webhook — see Step 4)
+DATABASE_URL         = (reference from PostgreSQL service)
+REDIS_URL            = (reference from Redis service)
+STRIPE_SECRET_KEY    = (your sk_test_... key from Stripe Dashboard)
+STRIPE_PUBLISHABLE_KEY = (your pk_test_... key from Stripe Dashboard)
+STRIPE_WEBHOOK_SECRET = (whsec_... from Stripe → Webhooks)
 STRIPE_PRICE_ID      = price_1TNhCiB6nlyxBcZvphYPYmK5
 STRIPE_SUB_PRICE_ID  = price_1TNhCiB6nlyxBcZvchN2Q9CA
-FRONTEND_URL         = https://skybaseintel.com
 APP_ENV              = production
-SECRET_KEY           = (generate a random string — e.g. openssl rand -hex 32)
+FRONTEND_URL         = https://skybaseintel.com
+SECRET_KEY           = 0a5d263856badc969e7a016e51fcb318927e4d4e7411641cf62b317b966608b9
+FROM_EMAIL           = reports@skybaseintel.com
 ```
 
-- Under **Networking** → **Public Networking**: add domain `api.skybaseintel.com`
+Leave these blank for now (optional — not required to run):
+```
+EIA_API_KEY          = (leave empty)
+GOOGLE_MAPS_API_KEY  = (leave empty)
+AWS_ACCESS_KEY_ID    = (leave empty)
+AWS_SECRET_ACCESS_KEY = (leave empty)
+AWS_S3_BUCKET        = skybase-reports
+AWS_REGION           = us-east-1
+```
 
----
+## Complete Variable List for Worker Service
 
-## Step 3 — Configure Worker Service
-
-In the **worker** service settings:
-- **Build**: Dockerfile (same image — Railway builds it once)
-- **Start Command** (OVERRIDE): `celery -A app.tasks.orchestrator:celery_app worker --loglevel=info --concurrency=2`
-  - To override: Settings → Deploy → Start Command → toggle off "Use Dockerfile CMD" → paste command
-- Add the **same environment variables** as the web service (reference the same Postgres + Redis)
-- **Do NOT** add a public domain to the worker — it doesn't need one
+Same as web, plus the start command override:
+```
+DATABASE_URL         = (reference from PostgreSQL service — same as web)
+REDIS_URL            = (reference from Redis service — same as web)
+STRIPE_SECRET_KEY    = (same as web)
+STRIPE_PRICE_ID      = price_1TNhCiB6nlyxBcZvphYPYmK5
+APP_ENV              = production
+SECRET_KEY           = 0a5d263856badc969e7a016e51fcb318927e4d4e7411641cf62b317b966608b9
+```
 
 ---
 
@@ -58,36 +103,24 @@ In the **worker** service settings:
 
 1. Go to [dashboard.stripe.com/webhooks](https://dashboard.stripe.com/webhooks)
 2. Click **Add endpoint**
-3. Endpoint URL: `https://api.skybaseintel.com/api/v1/analyses/webhook/stripe`
-4. Events to listen for: `checkout.session.completed`
-5. Click **Add endpoint**
-6. On the next page, click **Reveal** under "Signing secret"
-7. Copy the `whsec_...` value → paste as `STRIPE_WEBHOOK_SECRET` in Railway web service variables
-
----
-
-## Step 5 — Deploy
-
-1. Railway auto-deploys when you push to GitHub
-2. Check **Deployments** tab for build logs
-3. Web service should show green health check at `/health`
-4. Worker service logs should show: `celery@... ready.`
+3. URL: `https://<your-railway-domain>/api/v1/analyses/webhook/stripe`
+   - Find your Railway domain under web service → **Settings** → **Networking** → **Public Networking**
+4. Events: select `checkout.session.completed`
+5. After saving, click **Reveal** on the signing secret → copy the `whsec_...` value
+6. Paste it as `STRIPE_WEBHOOK_SECRET` in Railway web service variables
 
 ---
 
 ## Troubleshooting
 
-**Build fails:**
-- Check Dockerfile — WeasyPrint needs system libs (libpango, libcairo) which are in the Dockerfile
-- Make sure all requirements.txt packages are spelled correctly
+**Worker crashes on startup:**
+- Most likely `REDIS_URL` is still `redis://localhost:6379/0` — Celery can't connect to localhost inside Railway
+- Fix: set `REDIS_URL` to the Railway Redis internal URL (see above)
 
-**Worker not processing jobs:**
-- Verify `REDIS_URL` is the same in both web and worker services
-- Check worker logs for connection errors
+**Web service 500 errors:**
+- Most likely `DATABASE_URL` is still the localhost placeholder
+- Fix: set it to the Railway PostgreSQL URL
 
-**PDF not generating:**
-- WeasyPrint on Railway may need additional fonts — if reports show blank text, add `fonts-liberation` to apt-get in Dockerfile
-
-**`DATABASE_URL` format:**
-- Railway gives you `postgresql://user:pass@host:port/db`
-- SQLAlchemy works with this format directly — no changes needed
+**PDF reports not generating:**
+- Worker needs the same `DATABASE_URL` and `REDIS_URL` as the web service
+- Verify both variables are set on the worker service too
