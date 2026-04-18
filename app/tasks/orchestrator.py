@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-celery_app = Celery("skybase", broker=REDIS_URL, backend=REDIS_URL)
+celery_app = Celery(
+    "skybase",
+    broker=REDIS_URL,
+    backend=REDIS_URL,
+    include=["app.tasks.pdf_task"],  # ensure pipeline.pdf task is registered on the worker
+)
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]

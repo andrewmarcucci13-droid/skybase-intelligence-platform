@@ -198,18 +198,6 @@ async def create_analysis(
     db.commit()
     db.refresh(analysis)
 
-    # Geocode the address
-    from app.services.geocoding import geocode_address_sync
-    try:
-        geo = geocode_address_sync(payload.address)
-        analysis.latitude = geo["lat"]
-        analysis.longitude = geo["lon"]
-        analysis.address_formatted = geo["formatted"]
-    except Exception as e:
-        # Store error but don't fail the request — user still gets to pay
-        analysis.address_formatted = payload.address
-    db.commit()
-
     # Stripe Checkout session
     price_id = os.getenv("STRIPE_PRICE_ID", "")
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -224,9 +212,9 @@ async def create_analysis(
             success_url=f"{frontend_url}/status/{analysis.id}?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{frontend_url}/analyze?cancelled=true",
         )
-        analysis.stripe_session_id = session.id
+        db.query(Analysis).filter_by(id=analysis.id).update({"stripe_session_id": session.id})
         db.commit()
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         # In dev/test without Stripe keys, return a mock
         return {
             "analysis_id": str(analysis.id),
@@ -377,10 +365,11 @@ async def create_checkout_session(
             success_url=f"{frontend_url}/status/{analysis.id}?payment=success",
             cancel_url=f"{frontend_url}/analyze?cancelled=true",
         )
-        analysis.stripe_session_id = session.id
+        # Use update() to avoid unique constraint violation if session_id already set
+        db.query(Analysis).filter_by(id=analysis.id).update({"stripe_session_id": session.id})
         db.commit()
         return {"checkout_url": session.url}
-    except Exception as e:
+    except stripe.StripeError as e:
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
 
 

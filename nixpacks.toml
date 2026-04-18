@@ -1,0 +1,13 @@
+# nixpacks.toml — used by Railway when builder=NIXPACKS
+# The Dockerfile is used for the web service.
+# For the worker service, override the start command in Railway dashboard:
+#   celery -A app.tasks.orchestrator:celery_app worker --loglevel=info --concurrency=2
+
+[phases.setup]
+nixPkgs = ["python311", "gcc", "libpq", "pango", "cairo", "gdk-pixbuf", "libffi", "libxml2", "libxslt"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
