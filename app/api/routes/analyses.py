@@ -5,8 +5,9 @@ import os
 import re
 import httpx
 import stripe
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
@@ -349,3 +350,64 @@ async def stripe_webhook(
                     print(f"[WARN] Could not enqueue Celery task: {e}")
 
     return JSONResponse(content={"received": True})
+
+
+@router.post("/{analysis_id}/checkout", summary="Create Stripe Checkout Session")
+@limiter.limit("10/minute")
+async def create_checkout_session(
+    request: Request,
+    analysis_id: str,
+    db: Session = Depends(get_db),
+):
+    """Create a Stripe Checkout Session for an existing analysis."""
+    analysis = db.query(Analysis).filter_by(id=analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    price_id = os.getenv("STRIPE_PRICE_ID", "price_1TNhCiB6nlyxBcZvphYPYmK5")
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            mode="payment",
+            line_items=[{"price": price_id, "quantity": 1}],
+            customer_email=analysis.customer_email,
+            metadata={"analysis_id": str(analysis.id)},
+            success_url=f"{frontend_url}/status/{analysis.id}?payment=success",
+            cancel_url=f"{frontend_url}/analyze?cancelled=true",
+        )
+        analysis.stripe_session_id = session.id
+        db.commit()
+        return {"checkout_url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+
+@router.get("/{analysis_id}/report", summary="Download PDF report")
+@limiter.limit("20/minute")
+def download_report(request: Request, analysis_id: str, db: Session = Depends(get_db)):
+    """Download the generated PDF report for a completed analysis."""
+    analysis = db.query(Analysis).filter_by(id=analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    if analysis.status != AnalysisStatus.COMPLETE:
+        raise HTTPException(status_code=400, detail="Analysis is not yet complete")
+
+    pdf_path = analysis.report_s3_key
+    if not pdf_path or not Path(pdf_path).exists():
+        # Try the default path
+        default_path = f"/tmp/skybase_reports/{analysis_id}.pdf"
+        if Path(default_path).exists():
+            pdf_path = default_path
+        else:
+            raise HTTPException(status_code=404, detail="Report PDF not found. It may still be generating.")
+
+    filename = f"SkyBase_Report_{analysis_id[:8]}.pdf"
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

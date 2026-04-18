@@ -1,0 +1,10 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "env": {
+    "NEXT_PUBLIC_API_URL": "https://api.skybaseintel.com",
+    "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY": "pk_test_51TMHUPB6nlyxBcZvW2AptECQZRrt7vjC41hZlO9QiDlS9V9HL5Fx1H9qrKsj1aqj10jCBIhi8yJCo6225LEPSDSA00BYVnb1m4",
+    "NEXT_PUBLIC_STRIPE_PRICE_ID": "price_1TNhCiB6nlyxBcZvphYPYmK5"
+  }
+}
